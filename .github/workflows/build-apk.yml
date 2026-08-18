@@ -16,9 +16,10 @@ jobs:
         uses: actions/checkout@v4
       - name: Restore Android project
         run: |
-          cat v041_00.b64 v041_01.b64 v041_02.b64 v041_03.b64 | base64 -d > project.zip
+          cat v3_0.b64 v3_1.b64 v3_2.b64 v3_3.b64 v3_4.b64 v3_5.b64 | base64 -d > project.zip
           unzip -q project.zip
           rm -f project.zip
+          patch -p1 < v041.patch
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
