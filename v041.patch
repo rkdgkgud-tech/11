@@ -1,0 +1,249 @@
+--- a/app/src/main/java/com/partywon/nasswipeviewer/BrowserActivity.kt
++++ b/app/src/main/java/com/partywon/nasswipeviewer/BrowserActivity.kt
+@@ -65,7 +65,7 @@
+         root.addView(statusView)
+ 
+         grid = GridView(this).apply {
+-            numColumns = 3
++            numColumns = 2
+             horizontalSpacing = dp(6)
+             verticalSpacing = dp(10)
+             stretchMode = GridView.STRETCH_COLUMN_WIDTH
+@@ -183,7 +183,7 @@
+                     scaleType = ImageView.ScaleType.CENTER_CROP
+                     setBackgroundColor(Color.rgb(45, 45, 45))
+                 }
+-                frame.addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(112)))
++                frame.addView(image, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(240)))
+                 val badge = TextView(this@BrowserActivity).apply {
+                     setTextColor(Color.WHITE)
+                     setBackgroundColor(0x88000000.toInt())
+@@ -191,7 +191,7 @@
+                     textSize = 16f
+                 }
+                 frame.addView(badge, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
+-                cell.addView(frame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(112)))
++                cell.addView(frame, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(240)))
+                 val name = TextView(this@BrowserActivity).apply {
+                     setTextColor(Color.WHITE)
+                     textSize = 12f
+@@ -233,7 +233,7 @@
+                     } else {
+                         holder.image.setBackgroundColor(Color.rgb(45, 45, 45))
+                         io.execute {
+-                            val bmp = runCatching { AppSession.repository?.loadThumbnail(item, dp(180)) }.getOrNull()
++                            val bmp = runCatching { AppSession.repository?.loadThumbnail(item, dp(240)) }.getOrNull()
+                             if (bmp != null) cache.put(item.smbUrl, bmp)
+                             runOnUiThread {
+                                 if (holder.image.tag == item.smbUrl && bmp != null) holder.image.setImageBitmap(bmp)
+--- a/app/src/main/java/com/partywon/nasswipeviewer/ViewerActivity.kt
++++ b/app/src/main/java/com/partywon/nasswipeviewer/ViewerActivity.kt
+@@ -1,10 +1,13 @@
+ package com.partywon.nasswipeviewer
+ 
+ import android.app.Activity
++import android.app.AlertDialog
+ import android.content.Context
+ import android.graphics.Color
+ import android.media.AudioManager
+ import android.os.Bundle
++import android.os.Handler
++import android.os.Looper
+ import android.view.*
+ import android.widget.FrameLayout
+ import android.widget.ImageView
+@@ -31,6 +34,11 @@
+     private var index = 0
+     private var imageScale = 1f
+     private val resumePrefs by lazy { getSharedPreferences("resume", MODE_PRIVATE) }
++    private val settingsPrefs by lazy { getSharedPreferences("viewer_settings", MODE_PRIVATE) }
++    private val holdHandler = Handler(Looper.getMainLooper())
++    private var hold2x: Runnable? = null
++    private var hold3x: Runnable? = null
++    private var speedHolding = false
+ 
+     private var downX = 0f
+     private var downY = 0f
+@@ -41,7 +49,7 @@
+     private var initialVolume = 0
+     private var initialBrightness = 0.5f
+ 
+-    private enum class GestureMode { NONE, SEEK, BRIGHTNESS, VOLUME, PREV_EDGE, NEXT_EDGE }
++    private enum class GestureMode { NONE, SEEK, PREV_EDGE, NEXT_EDGE }
+ 
+     override fun onCreate(savedInstanceState: Bundle?) {
+         super.onCreate(savedInstanceState)
+@@ -138,7 +146,31 @@
+             setPadding(dp(12), dp(8), dp(12), dp(8))
+             textSize = 14f
+         }
+-        root.addView(titleView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
++        val titleLp = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
++            leftMargin = dp(58)
++            rightMargin = dp(58)
++        }
++        root.addView(titleView, titleLp)
++
++        val backButton = TextView(this).apply {
++            text = "←"
++            setTextColor(Color.WHITE)
++            setBackgroundColor(0x77000000)
++            textSize = 28f
++            gravity = Gravity.CENTER
++            setOnClickListener { finish() }
++        }
++        root.addView(backButton, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.TOP or Gravity.START))
++
++        val settingsButton = TextView(this).apply {
++            text = "⚙"
++            setTextColor(Color.WHITE)
++            setBackgroundColor(0x77000000)
++            textSize = 24f
++            gravity = Gravity.CENTER
++            setOnClickListener { showSeekSettings() }
++        }
++        root.addView(settingsButton, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.TOP or Gravity.END))
+ 
+         overlay = TextView(this).apply {
+             setTextColor(Color.WHITE)
+@@ -191,8 +223,12 @@
+                 MotionEvent.ACTION_UP -> {
+                     val dx = event.x - x
+                     val dy = event.y - y
+-                    if (imageScale <= 1.05f && abs(dx) > dp(90) && abs(dx) > abs(dy) * 1.2f) {
+-                        if (dx < 0) go(+1) else go(-1)
++                    if (imageScale <= 1.05f) {
++                        if (abs(dy) > dp(90) && abs(dy) > abs(dx) * 1.2f) {
++                            if (dy < 0) go(-1) else go(+1)
++                        } else if (abs(dx) > dp(90) && abs(dx) > abs(dy) * 1.2f) {
++                            if (dx < 0) go(+1) else go(-1)
++                        }
+                     }
+                     return true
+                 }
+@@ -234,41 +270,25 @@
+                     gestureMode = when {
+                         downX < w * 0.12f -> GestureMode.PREV_EDGE
+                         downX > w * 0.88f -> GestureMode.NEXT_EDGE
+-                        downX < w * 0.35f -> GestureMode.BRIGHTNESS
+-                        downX > w * 0.65f -> GestureMode.VOLUME
+                         else -> GestureMode.SEEK
+                     }
+-                    initialVolume = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+-                    initialBrightness = currentBrightness()
++                    scheduleSpeedHold(p)
+                     return true
+                 }
+                 MotionEvent.ACTION_MOVE -> {
+                     val dx = event.x - downX
+                     val dy = event.y - downY
++                    if (abs(dx) > dp(18) || abs(dy) > dp(18)) cancelSpeedHold(resetSpeed = true)
+                     when (gestureMode) {
+                         GestureMode.SEEK -> {
+                             if (abs(dx) > dp(12) && abs(dx) > abs(dy)) {
+                                 seeking = true
+                                 val duration = p.duration.takeIf { it > 0 } ?: 0L
+-                                val seekRange = min(300_000L, max(60_000L, duration / 3))
++                                val seekRange = seekRangeMs()
+                                 targetPosition = (startPosition + (dx / w * seekRange).toLong()).coerceIn(0L, duration)
+                                 flash("${formatMs(targetPosition)}  (${signedSeconds(targetPosition - startPosition)})")
+                             }
+                         }
+-                        GestureMode.BRIGHTNESS -> {
+-                            if (abs(dy) > abs(dx)) {
+-                                val value = (initialBrightness - dy / h).coerceIn(0.02f, 1f)
+-                                setBrightness(value)
+-                                flash("밝기 ${(value * 100).toInt()}%")
+-                            }
+-                        }
+-                        GestureMode.VOLUME -> {
+-                            if (abs(dy) > abs(dx)) {
+-                                val value = (initialVolume - dy / h * maxVolume).toInt().coerceIn(0, maxVolume)
+-                                audio.setStreamVolume(AudioManager.STREAM_MUSIC, value, 0)
+-                                flash("볼륨 ${(value * 100 / maxVolume.coerceAtLeast(1))}%")
+-                            }
+-                        }
+                         else -> Unit
+                     }
+                     return true
+@@ -276,11 +296,17 @@
+                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                     val dx = event.x - downX
+                     val dy = event.y - downY
+-                    when (gestureMode) {
+-                        GestureMode.SEEK -> if (seeking && p.duration > 0) p.seekTo(targetPosition)
+-                        GestureMode.PREV_EDGE -> if (dx > dp(70) && abs(dx) > abs(dy)) go(-1)
+-                        GestureMode.NEXT_EDGE -> if (dx < -dp(70) && abs(dx) > abs(dy)) go(+1)
+-                        else -> Unit
++                    val wasSpeedHolding = speedHolding
++                    cancelSpeedHold(resetSpeed = true)
++                    if (!wasSpeedHolding && abs(dy) > dp(90) && abs(dy) > abs(dx) * 1.2f) {
++                        if (dy < 0) go(-1) else go(+1)
++                    } else if (!wasSpeedHolding) {
++                        when (gestureMode) {
++                            GestureMode.SEEK -> if (seeking && p.duration > 0) p.seekTo(targetPosition)
++                            GestureMode.PREV_EDGE -> if (dx > dp(70) && abs(dx) > abs(dy)) go(-1)
++                            GestureMode.NEXT_EDGE -> if (dx < -dp(70) && abs(dx) > abs(dy)) go(+1)
++                            else -> Unit
++                        }
+                     }
+                     gestureMode = GestureMode.NONE
+                     return true
+@@ -290,6 +316,49 @@
+         }
+     }
+ 
++    private fun seekRangeMs(): Long = settingsPrefs.getLong("seek_range_ms", 60_000L)
++
++    private fun showSeekSettings() {
++        val labels = arrayOf("5초", "10초", "30초", "1분", "5분")
++        val values = longArrayOf(5_000L, 10_000L, 30_000L, 60_000L, 300_000L)
++        val current = seekRangeMs()
++        val checked = values.indexOf(current).coerceAtLeast(3)
++        AlertDialog.Builder(this)
++            .setTitle("좌우 드래그 탐색 범위")
++            .setSingleChoiceItems(labels, checked) { dialog, which ->
++                settingsPrefs.edit().putLong("seek_range_ms", values[which]).apply()
++                flash("탐색 범위 ${labels[which]}")
++                dialog.dismiss()
++            }
++            .setNegativeButton("취소", null)
++            .show()
++    }
++
++    private fun scheduleSpeedHold(p: ExoPlayer) {
++        cancelSpeedHold(resetSpeed = false)
++        speedHolding = false
++        hold2x = Runnable {
++            speedHolding = true
++            p.setPlaybackSpeed(2f)
++            flash("2.0×")
++        }.also { holdHandler.postDelayed(it, 500) }
++        hold3x = Runnable {
++            if (speedHolding) {
++                p.setPlaybackSpeed(3f)
++                flash("3.0×")
++            }
++        }.also { holdHandler.postDelayed(it, 1500) }
++    }
++
++    private fun cancelSpeedHold(resetSpeed: Boolean) {
++        hold2x?.let { holdHandler.removeCallbacks(it) }
++        hold3x?.let { holdHandler.removeCallbacks(it) }
++        hold2x = null
++        hold3x = null
++        if (resetSpeed && speedHolding) player?.setPlaybackSpeed(1f)
++        speedHolding = false
++    }
++
+     private fun currentBrightness(): Float {
+         val b = window.attributes.screenBrightness
+         return if (b < 0f) 0.5f else b
+@@ -329,6 +398,7 @@
+     }
+ 
+     override fun onDestroy() {
++        cancelSpeedHold(resetSpeed = true)
+         releasePlayer(savePosition = true)
+         io.shutdownNow()
+         super.onDestroy()
